@@ -1,0 +1,13 @@
+#Info:
+Classifier: GAN-BERT Classifier
+Label: author
+Text label: text
+
+#Counts:
+Number of training unlabeled_data_records: 38295
+Number of training labeled_data_records: 782
+Number of classified data_records: 4881
+Number of unique classes in data_records: 7
+Number of unique classes found: 7
+
+#Classification report:

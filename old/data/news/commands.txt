@@ -1,0 +1,1 @@
+python .\run_classifier.py --classifier LinearSVC --training ..\..\..\data\news\classification_news_train.jsonl --input ..\..\..\data\news\classification_news_eval.jsonl --label category --text_label headline

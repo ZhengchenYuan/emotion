@@ -15,6 +15,7 @@ from sklearn.utils.multiclass import unique_labels
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from transformers import AutoModel, AutoTokenizer, AutoConfig, get_constant_schedule_with_warmup
+from sklearn.metrics import classification_report
 
 
 seed_val = 42
@@ -74,28 +75,32 @@ class Ganbert:
                  num_hidden_layers_g=1, num_hidden_layers_d=1, noise_size=100, out_dropout_rate=0.2,
                  apply_balance=True, learning_rate_discriminator=5e-5, learning_rate_generator=5e-5,
                  epsilon=1e-8, apply_scheduler=False, warmup_proportion=0.1):
-        # load the BERT model
+        # 初始化标签
+        self.label_list = label_list
+        self.label_map = {label: i for i, label in enumerate(self.label_list)}
+        self.id2label = {i: label for i, label in enumerate(self.label_list)}
+
+        # 调试输出
+        print("标签列表:", self.label_list)
+        print("标签映射:", self.label_map)
+
+        # 加载 BERT 模型和 Tokenizer
         self.transformer = AutoModel.from_pretrained(model)
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.max_seq_length = max_seq_length
         self.batch_size = batch_size
         self.device = torch.device(device)
 
-        # number of hidden layers in the generator,  each of the size of the output space
+        # 初始化其他参数
         self.num_hidden_layers_g = num_hidden_layers_g
-        # number of hidden layers in the discriminator, each of the size of the input space
         self.num_hidden_layers_d = num_hidden_layers_d
-        # size of the generator's input noisy vectors
         self.noise_size = noise_size
-        # dropout to be applied to discriminator's input vectors
         self.out_dropout_rate = out_dropout_rate
-        # Replicate labeled data to balance poorly represented datasets, e.g. less than 1% of labeled material
         self.apply_balance = apply_balance
 
         self.learning_rate_discriminator = learning_rate_discriminator
         self.learning_rate_generator = learning_rate_generator
         self.epsilon = epsilon
-        # Scheduler
         self.apply_scheduler = apply_scheduler
         self.warmup_proportion = warmup_proportion
 
@@ -152,7 +157,7 @@ class Ganbert:
 
         # Tokenization
         for (text, label_mask) in examples:
-            encoded_sent = self.tokenizer.encode(text[0], add_special_tokens=True, max_length=self.max_seq_length,
+            encoded_sent = self.tokenizer.encode(text[0] + f" [EMOTION] {text[1].split('_')[0]}", add_special_tokens=True, max_length=self.max_seq_length,
                                             padding="max_length", truncation=True)
             input_ids.append(encoded_sent)
             label_id_array.append(label_map[text[1]])
@@ -218,7 +223,7 @@ class Ganbert:
         # Compute confusion matrix
         cm = confusion_matrix(y_true, y_pred)
         # Only use the labels that appear in the data
-        classes = unique_labels(y_true, y_pred)
+        classes = sorted(label_list)
         if normalize:
             cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
 
@@ -263,10 +268,9 @@ class Ganbert:
             print('No GPU available, using the CPU instead.')
             self.device = torch.device("cpu")
 
-        label_map, id2label = dict(), dict()
-        for (i, label) in enumerate(label_list):
-            label_map[label] = i
-            id2label[i] = label
+        label_list = [f"{emotion}_{intensity}" for emotion in ['joy', 'sadness', 'fear', 'anger', 'surprise'] for intensity in range(4)]
+        label_map = {label: i for i, label in enumerate(label_list)}
+        id2label = {i: label for i, label in enumerate(label_list)}
 
         # Load the train dataset
         train_examples = labeled_data
@@ -461,7 +465,7 @@ class Ganbert:
             all_labels_ids = []
 
             # loss
-            nll_loss = torch.nn.CrossEntropyLoss(ignore_index=-1)
+            nll_loss = torch.nn.CrossEntropyLoss()
 
             # Evaluate data for one epoch
             for batch in test_dataloader:
@@ -489,10 +493,10 @@ class Ganbert:
             all_preds = torch.stack(all_preds).numpy()
             all_labels_ids = torch.stack(all_labels_ids).numpy()
             predicted_classes = [id2label[pred_id] for pred_id in all_preds]
-            expected_classes = [id2label[glod_id] for glod_id in all_labels_ids]
+            expected_classes = [id2label[true_id] for true_id in all_labels_ids]
             test_accuracy = np.sum(all_preds == all_labels_ids) / len(all_preds)
             acc_list.append(test_accuracy)
-            print("  Accuracy: {0:.3f}".format(test_accuracy))
+            print(classification_report(expected_classes, predicted_classes, digits=3))
 
             # Calculate the average loss over all the batches.
             avg_test_loss = total_test_loss / len(test_dataloader)
@@ -505,6 +509,9 @@ class Ganbert:
 
             with open(outfile_name, "a", encoding="utf-8") as outfile:
                 outfile.write('\n - Epoch {:} / {:}\n'.format(epoch_i + 1, num_train_epochs))
+                report = classification_report(expected_classes, predicted_classes, digits=3, output_dict=True)
+                for label, metrics in report.items():
+                    outfile.write(f"{label}: {metrics}\n")
                 outfile.write(' - {0}\n'.format(
                     sklearn.metrics.classification_report(expected_classes, predicted_classes, digits=3)))
                 # Print the entire confusion matrix, not truncated
@@ -554,4 +561,6 @@ class Ganbert:
         plt.ylabel('Loss')
         plt.savefig('results/loss.png')
         plt.clf()
+
+        
 

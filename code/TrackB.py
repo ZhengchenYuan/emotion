@@ -57,10 +57,13 @@ data = pd.read_csv("eng(b).csv")
 
 # Step 1: Prepare the data
 train_data = data.iloc[:100]
-test_data = data.iloc[100:120]
+dev_data = data.iloc[100:120]
+test_data = data.iloc[120:130]
 
 X_train = train_data['text']
 y_train = train_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
+X_dev = dev_data['text']
+y_dev = dev_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
 X_test = test_data['text']
 y_test = test_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
 
@@ -69,9 +72,11 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 MAX_LEN = 128
 
 train_dataset = EmotionIntensityDataset(X_train.tolist(), y_train, tokenizer, MAX_LEN)
+dev_dataset = EmotionIntensityDataset(X_dev.tolist(), y_dev, tokenizer, MAX_LEN)
 test_dataset = EmotionIntensityDataset(X_test.tolist(), y_test, tokenizer, MAX_LEN)
 
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+dev_loader = DataLoader(dev_dataset, batch_size=16)
 test_loader = DataLoader(test_dataset, batch_size=16)
 
 # Step 3: Initialize the model
@@ -98,7 +103,51 @@ for epoch in range(EPOCHS):
         loss.backward()
         optimizer.step()
 
-# Step 5: Evaluation
+# Step 5: Determine best thresholds on development set
+def evaluate_thresholds(loader, thresholds):
+    model.eval()
+    predictions = []
+    true_values = []
+
+    with torch.no_grad():
+        for batch in loader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+
+            outputs = model(input_ids, attention_mask)
+            thresholded_outputs = outputs.clone()
+
+            for i, t in enumerate(thresholds):
+                thresholded_outputs[(outputs > t[0]) & (outputs <= t[1])] = i
+
+            predictions.append(thresholded_outputs.cpu().numpy())
+            true_values.append(labels.cpu().numpy())
+
+    predictions = np.vstack(predictions)
+    true_values = np.vstack(true_values)
+    mse = mean_squared_error(true_values, predictions, multioutput='raw_values')
+    return mse
+
+# Generate and evaluate different threshold combinations
+best_thresholds = None
+best_mse = float('inf')
+threshold_ranges = np.linspace(0, 3, num=4)
+
+for t1 in threshold_ranges:
+    for t2 in threshold_ranges:
+        for t3 in threshold_ranges:
+            if t1 < t2 < t3:  # Ensure thresholds are valid
+                thresholds = [(0, t1), (t1, t2), (t2, t3), (t3, 3)]
+                mse = evaluate_thresholds(dev_loader, thresholds)
+                mse_avg = mse.mean()
+                if mse_avg < best_mse:
+                    best_mse = mse_avg
+                    best_thresholds = thresholds
+
+print(f"Best thresholds: {best_thresholds}, Best MSE: {best_mse}")
+
+# Step 6: Evaluate on test set
 model.eval()
 predictions = []
 true_values = []
@@ -110,7 +159,12 @@ with torch.no_grad():
         labels = batch['labels'].to(device)
 
         outputs = model(input_ids, attention_mask)
-        predictions.append(outputs.cpu().numpy())
+        thresholded_outputs = outputs.clone()
+
+        for i, t in enumerate(best_thresholds):
+            thresholded_outputs[(outputs > t[0]) & (outputs <= t[1])] = i
+
+        predictions.append(thresholded_outputs.cpu().numpy())
         true_values.append(labels.cpu().numpy())
 
 predictions = np.vstack(predictions)
@@ -124,6 +178,12 @@ results_comparison = pd.concat([predictions_df, true_values_df], axis=1)
 
 print("Predictions vs True Values:")
 print(results_comparison)
+
+# Calculate MSE for test set
+mse_test = mean_squared_error(true_values, predictions, multioutput='raw_values')
+mse_test_df = pd.DataFrame(mse_test, index=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'], columns=['MSE'])
+print("Mean Squared Error on Test Set:")
+print(mse_test_df)
 
 # Calculate MSE for each emotion
 mse = mean_squared_error(true_values, predictions, multioutput='raw_values')

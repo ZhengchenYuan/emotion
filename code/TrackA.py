@@ -1,5 +1,5 @@
 import pandas as pd
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, f1_score
 from transformers import BertTokenizer, BertModel
 import torch
 from torch import nn, optim
@@ -57,10 +57,13 @@ data = pd.read_csv("eng(a).csv")
 
 # Step 1: Prepare the data
 train_data = data.iloc[:100]
-test_data = data.iloc[100:120]
+dev_data = data.iloc[100:120]
+test_data = data.iloc[120:130]
 
 X_train = train_data['text']
 y_train = train_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
+X_dev = dev_data['text']
+y_dev = dev_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
 X_test = test_data['text']
 y_test = test_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
 
@@ -69,9 +72,11 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 MAX_LEN = 128
 
 train_dataset = EmotionDataset(X_train.tolist(), y_train, tokenizer, MAX_LEN)
+dev_dataset = EmotionDataset(X_dev.tolist(), y_dev, tokenizer, MAX_LEN)
 test_dataset = EmotionDataset(X_test.tolist(), y_test, tokenizer, MAX_LEN)
 
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+dev_loader = DataLoader(dev_dataset, batch_size=16)
 test_loader = DataLoader(test_dataset, batch_size=16)
 
 # Step 3: Initialize the model
@@ -98,7 +103,42 @@ for epoch in range(EPOCHS):
         loss.backward()
         optimizer.step()
 
-# Step 5: Evaluation
+# Step 5: Determine best threshold on development set
+def evaluate_threshold(loader, threshold):
+    model.eval()
+    predictions = []
+    true_values = []
+
+    with torch.no_grad():
+        for batch in loader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+
+            outputs = model(input_ids, attention_mask)
+            sigmoid_outputs = torch.sigmoid(outputs)
+            binary_predictions = (sigmoid_outputs > threshold).float()
+            predictions.append(binary_predictions.cpu().numpy())
+            true_values.append(labels.cpu().numpy())
+
+    predictions = np.vstack(predictions)
+    true_values = np.vstack(true_values)
+    f1 = f1_score(true_values, predictions, average='micro')
+    return f1
+
+best_threshold = 0.0
+best_f1 = 0.0
+thresholds = np.arange(0.1, 0.9, 0.1)
+
+for threshold in thresholds:
+    f1 = evaluate_threshold(dev_loader, threshold)
+    if f1 > best_f1:
+        best_f1 = f1
+        best_threshold = threshold
+
+print(f"Best threshold: {best_threshold}, Best F1 score: {best_f1}")
+
+# Step 6: Evaluate on test set
 model.eval()
 predictions = []
 true_values = []
@@ -110,7 +150,9 @@ with torch.no_grad():
         labels = batch['labels'].to(device)
 
         outputs = model(input_ids, attention_mask)
-        predictions.append(torch.sigmoid(outputs).cpu().numpy())
+        sigmoid_outputs = torch.sigmoid(outputs)
+        binary_predictions = (sigmoid_outputs > best_threshold).float()
+        predictions.append(binary_predictions.cpu().numpy())
         true_values.append(labels.cpu().numpy())
 
 predictions = np.vstack(predictions)

@@ -116,7 +116,7 @@ def evaluate_thresholds(loader, thresholds):
             labels = batch['labels'].to(device)
 
             outputs = model(input_ids, attention_mask)
-            thresholded_outputs = outputs.clone()
+            thresholded_outputs = torch.zeros_like(outputs)
 
             for i, t in enumerate(thresholds):
                 thresholded_outputs[(outputs > t[0]) & (outputs <= t[1])] = i
@@ -132,7 +132,7 @@ def evaluate_thresholds(loader, thresholds):
 # Generate and evaluate different threshold combinations
 best_thresholds = None
 best_mse = float('inf')
-threshold_ranges = np.linspace(0, 3, num=4)
+threshold_ranges = np.linspace(0, 3, num=10)
 
 for t1 in threshold_ranges:
     for t2 in threshold_ranges:
@@ -159,7 +159,7 @@ with torch.no_grad():
         labels = batch['labels'].to(device)
 
         outputs = model(input_ids, attention_mask)
-        thresholded_outputs = outputs.clone()
+        thresholded_outputs = torch.zeros_like(outputs)
 
         for i, t in enumerate(best_thresholds):
             thresholded_outputs[(outputs > t[0]) & (outputs <= t[1])] = i
@@ -184,9 +184,3 @@ mse_test = mean_squared_error(true_values, predictions, multioutput='raw_values'
 mse_test_df = pd.DataFrame(mse_test, index=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'], columns=['MSE'])
 print("Mean Squared Error on Test Set:")
 print(mse_test_df)
-
-# Calculate MSE for each emotion
-mse = mean_squared_error(true_values, predictions, multioutput='raw_values')
-mse_df = pd.DataFrame(mse, index=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'], columns=['MSE'])
-print("Mean Squared Error for Each Emotion:")
-print(mse_df)

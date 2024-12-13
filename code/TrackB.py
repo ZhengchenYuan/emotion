@@ -167,8 +167,8 @@ with torch.no_grad():
         predictions.append(thresholded_outputs.cpu().numpy())
         true_values.append(labels.cpu().numpy())
 
-predictions = np.vstack(predictions)
-true_values = np.vstack(true_values)
+predictions = np.vstack(predictions).astype(int)  # Ensure integer outputs
+true_values = np.vstack(true_values).astype(int)
 
 # Display predictions vs true values
 predictions_df = pd.DataFrame(predictions, columns=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'])

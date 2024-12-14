@@ -67,19 +67,26 @@ X = data['text']
 y = data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
 
 # Filter data where Track A predicted the emotion as 1
-selected_indices = track_a_predictions[track_a_predictions == 1].stack().index
-filtered_X = X.iloc[[i[0] for i in selected_indices]].reset_index(drop=True)
-filtered_y = y.iloc[[i[0] for i in selected_indices]].reset_index(drop=True)
+filtered_texts = []
+filtered_labels = []
+for i, row in track_a_predictions.iterrows():
+    for col in track_a_predictions.columns:
+        if row[col] == 1:  # Emotion predicted as present
+            filtered_texts.append(X.iloc[i])
+            filtered_labels.append(y.iloc[i][col])
+
+filtered_X = pd.DataFrame(filtered_texts, columns=['text'])
+filtered_y = pd.DataFrame(filtered_labels, columns=['intensity'])
 
 # Tokenization
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 MAX_LEN = 128
 
-intensity_dataset = IntensityDataset(filtered_X.tolist(), filtered_y, tokenizer, MAX_LEN)
+intensity_dataset = IntensityDataset(filtered_X['text'].tolist(), filtered_y, tokenizer, MAX_LEN)
 intensity_loader = DataLoader(intensity_dataset, batch_size=16, shuffle=True)
 
 # Initialize the intensity model
-intensity_model = IntensityRegressor(n_classes=5)
+intensity_model = IntensityRegressor(n_classes=1)  # Predicting intensity for one emotion at a time
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 intensity_model = intensity_model.to(device)
 
@@ -97,7 +104,7 @@ for epoch in range(EPOCHS):
         labels = batch['labels'].to(device)
 
         optimizer.zero_grad()
-        outputs = intensity_model(input_ids, attention_mask)
+        outputs = intensity_model(input_ids, attention_mask).squeeze(-1)  # Output shape: (batch_size,)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -111,15 +118,17 @@ with torch.no_grad():
         input_ids = batch['input_ids'].to(device)
         attention_mask = batch['attention_mask'].to(device)
 
-        outputs = intensity_model(input_ids, attention_mask)
-        intensity_predictions.append(outputs.cpu().numpy())
+        outputs = intensity_model(input_ids, attention_mask).squeeze(-1)  # Output shape: (batch_size,)
+        intensity_predictions.extend(outputs.cpu().numpy())
 
-intensity_predictions = np.vstack(intensity_predictions)
-
-# Combine Track A predictions with intensity predictions
+# Map intensity predictions back to Track A results
 final_results = track_a_predictions.copy()
-for i, col in enumerate(['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']):
-    final_results[col] = final_results[col].replace(1, pd.Series(intensity_predictions[:, i]).round().clip(1, 3))
+intensity_idx = 0
+for i, row in final_results.iterrows():
+    for col in final_results.columns:
+        if row[col] == 1:  # Replace 1 with predicted intensity
+            final_results.at[i, col] = round(max(1, min(3, intensity_predictions[intensity_idx])))  # Clip to [1, 3]
+            intensity_idx += 1
 
 print("Final Predictions (Combined with Intensity):")
 print(final_results)

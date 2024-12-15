@@ -1,134 +1,171 @@
 import pandas as pd
-from sklearn.metrics import mean_squared_error
-from transformers import BertTokenizer, BertModel
-import torch
-from torch import nn, optim
-from torch.utils.data import DataLoader, Dataset
 import numpy as np
+import torch
+import random
+from torch.utils.data import DataLoader, Dataset
+from transformers import AutoModel, AutoTokenizer
+from torch import nn, optim
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from tqdm import tqdm
 
-# Define custom dataset class
-class IntensityDataset(Dataset):
-    def __init__(self, texts, labels, tokenizer, max_len):
+# Set random seeds for reproducibility
+seed_val = 42
+random.seed(seed_val)
+np.random.seed(seed_val)
+torch.manual_seed(seed_val)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(seed_val)
+
+# Define Dataset Class
+class EmotionIntensityDataset(Dataset):
+    def __init__(self, texts, targets, tokenizer, max_len):
         self.texts = texts
-        self.labels = labels
+        self.targets = targets
         self.tokenizer = tokenizer
         self.max_len = max_len
 
     def __len__(self):
         return len(self.texts)
 
-    def __getitem__(self, item):
-        text = self.texts[item]
-        label = self.labels.iloc[item]
-
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+        targets = self.targets[idx]
         encoding = self.tokenizer(
             text,
-            max_length=self.max_len,
-            padding='max_length',
             truncation=True,
-            return_tensors="pt"
+            padding='max_length',
+            max_length=self.max_len,
+            return_tensors='pt'
         )
-
         return {
-            'text': text,
             'input_ids': encoding['input_ids'].squeeze(0),
             'attention_mask': encoding['attention_mask'].squeeze(0),
-            'labels': torch.tensor(label.values, dtype=torch.float)
+            'targets': torch.tensor(targets, dtype=torch.float)
         }
 
-# Define the model class for intensity prediction
-class IntensityRegressor(nn.Module):
-    def __init__(self, n_classes):
-        super(IntensityRegressor, self).__init__()
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
-        self.dropout = nn.Dropout(0.3)
-        self.out = nn.Linear(self.bert.config.hidden_size, n_classes)
+# Define Intensity Prediction Model
+class IntensityModel(nn.Module):
+    def __init__(self, base_model_name, num_outputs, dropout_rate=0.3):
+        super(IntensityModel, self).__init__()
+        self.bert = AutoModel.from_pretrained(base_model_name)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.output = nn.Linear(self.bert.config.hidden_size, num_outputs)
 
     def forward(self, input_ids, attention_mask):
-        outputs = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        output = self.dropout(outputs.pooler_output)
-        return self.out(output)
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        pooled_output = outputs.pooler_output
+        output = self.dropout(pooled_output)
+        return self.output(output)
 
-# Load Track A predictions (replace with actual Track A results)
-track_a_predictions = pd.DataFrame({
-    'Anger': [0, 1, 0, 1],
-    'Fear': [1, 0, 1, 1],
-    'Joy': [0, 0, 1, 1],
-    'Sadness': [1, 0, 1, 0],
-    'Surprise': [0, 1, 0, 1]
-})
+# Load Data
+data = pd.read_csv("trackb_emotions.csv")  # Assumes data with 'text' and 'emotion intensities'
 
-# Load the corresponding texts and ground truth intensity labels (for training intensity model)
-data = pd.read_csv("eng_intensity.csv")  # Assume this file contains text and intensity labels
-X = data['text']
-y = data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
-
-# Filter data where Track A predicted the emotion as 1
-filtered_texts = []
-filtered_labels = []
-for i, row in track_a_predictions.iterrows():
-    for col in track_a_predictions.columns:
-        if row[col] == 1:  # Emotion predicted as present
-            filtered_texts.append(X.iloc[i])
-            filtered_labels.append(y.iloc[i][col])
-
-filtered_X = pd.DataFrame(filtered_texts, columns=['text'])
-filtered_y = pd.DataFrame(filtered_labels, columns=['intensity'])
-
-# Tokenization
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+# Prepare Dataset
 MAX_LEN = 128
+BATCH_SIZE = 16
+EPOCHS = 5
+BASE_MODEL = 'bert-base-uncased'
+LEARNING_RATE = 2e-5
 
-intensity_dataset = IntensityDataset(filtered_X['text'].tolist(), filtered_y, tokenizer, MAX_LEN)
-intensity_loader = DataLoader(intensity_dataset, batch_size=16, shuffle=True)
+# Prepare Data
+texts = data['text'].tolist()
+targets = data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']].values
 
-# Initialize the intensity model
-intensity_model = IntensityRegressor(n_classes=1)  # Predicting intensity for one emotion at a time
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-intensity_model = intensity_model.to(device)
+train_texts, train_targets = texts[:80], targets[:80]
+val_texts, val_targets = texts[80:100], targets[80:100]
+test_texts, test_targets = texts[100:], targets[100:]
 
-# Training setup
-EPOCHS = 3
-optimizer = optim.Adam(intensity_model.parameters(), lr=2e-5)
+# Initialize Tokenizer
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+
+# Create DataLoaders
+train_dataset = EmotionIntensityDataset(train_texts, train_targets, tokenizer, MAX_LEN)
+val_dataset = EmotionIntensityDataset(val_texts, val_targets, tokenizer, MAX_LEN)
+test_dataset = EmotionIntensityDataset(test_texts, test_targets, tokenizer, MAX_LEN)
+
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
+
+# Initialize Model
+model = IntensityModel(BASE_MODEL, num_outputs=5).cuda()
+optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 criterion = nn.MSELoss()
 
-# Training loop for intensity prediction
-for epoch in range(EPOCHS):
-    intensity_model.train()
-    for batch in intensity_loader:
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
-        labels = batch['labels'].to(device)
+# Training Function
+def train_epoch(model, data_loader, optimizer, criterion):
+    model.train()
+    losses = []
+    for batch in tqdm(data_loader):
+        input_ids = batch['input_ids'].cuda()
+        attention_mask = batch['attention_mask'].cuda()
+        targets = batch['targets'].cuda()
 
         optimizer.zero_grad()
-        outputs = intensity_model(input_ids, attention_mask).squeeze(-1)  # Output shape: (batch_size,)
-        loss = criterion(outputs, labels)
+        outputs = model(input_ids, attention_mask)
+        loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
 
-# Predict intensities for Track A results
-intensity_model.eval()
-intensity_predictions = []
+        losses.append(loss.item())
+    return np.mean(losses)
 
-with torch.no_grad():
-    for batch in intensity_loader:
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
+# Evaluation Function
+def eval_model(model, data_loader, criterion):
+    model.eval()
+    losses = []
+    predictions = []
+    true_values = []
 
-        outputs = intensity_model(input_ids, attention_mask).squeeze(-1)  # Output shape: (batch_size,)
-        intensity_predictions.extend(outputs.cpu().numpy())
+    with torch.no_grad():
+        for batch in tqdm(data_loader):
+            input_ids = batch['input_ids'].cuda()
+            attention_mask = batch['attention_mask'].cuda()
+            targets = batch['targets'].cuda()
 
-# Map intensity predictions back to Track A results
-final_results = track_a_predictions.copy()
-intensity_idx = 0
-for i, row in final_results.iterrows():
-    for col in final_results.columns:
-        if row[col] == 1:  # Replace 1 with predicted intensity
-            final_results.at[i, col] = round(max(1, min(3, intensity_predictions[intensity_idx])))  # Clip to [1, 3]
-            intensity_idx += 1
+            outputs = model(input_ids, attention_mask)
+            loss = criterion(outputs, targets)
+            losses.append(loss.item())
 
-print("Final Predictions (Combined with Intensity):")
-print(final_results)
+            predictions.append(outputs.cpu().numpy())
+            true_values.append(targets.cpu().numpy())
+    return np.mean(losses), np.vstack(predictions), np.vstack(true_values)
+
+# Training Loop
+best_val_loss = float('inf')
+for epoch in range(EPOCHS):
+    print(f'Epoch {epoch + 1}/{EPOCHS}')
+    train_loss = train_epoch(model, train_loader, optimizer, criterion)
+    val_loss, val_preds, val_targets = eval_model(model, val_loader, criterion)
+    print(f'Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
+
+    if val_loss < best_val_loss:
+        torch.save(model.state_dict(), 'best_model.pth')
+        best_val_loss = val_loss
+
+# Load Best Model
+model.load_state_dict(torch.load('best_model.pth'))
+
+# Test Model
+test_loss, test_preds, test_targets = eval_model(model, test_loader, criterion)
+print(f'Test Loss: {test_loss:.4f}')
+
+# Post-process Predictions
+def post_process_predictions(preds):
+    return np.round(np.clip(preds, 0, 3)).astype(int)
+
+test_preds = post_process_predictions(test_preds)
+
+# Display Results
+predictions_df = pd.DataFrame(test_preds, columns=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'])
+true_values_df = pd.DataFrame(test_targets, columns=['Anger_True', 'Fear_True', 'Joy_True', 'Sadness_True', 'Surprise_True'])
+results_df = pd.concat([predictions_df, true_values_df], axis=1)
+
+print("Predictions vs True Values:")
+print(results_df)
+
+# Calculate Evaluation Metrics for Each Emotion
+for i, emotion in enumerate(['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']):
+    mse = mean_squared_error(test_targets[:, i], test_preds[:, i])
+    mae = mean_absolute_error(test_targets[:, i], test_preds[:, i])
+    print(f'{emotion}: MSE={mse:.4f}, MAE={mae:.4f}')

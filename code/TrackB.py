@@ -7,6 +7,7 @@ from transformers import AutoModel, AutoTokenizer
 from torch import nn, optim
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from tqdm import tqdm
+import os
 
 # Set random seeds for reproducibility
 seed_val = 42
@@ -15,6 +16,10 @@ np.random.seed(seed_val)
 torch.manual_seed(seed_val)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(seed_val)
+
+# Automatically select device (GPU/CPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
 # Define Dataset Class
 class EmotionIntensityDataset(Dataset):
@@ -62,9 +67,9 @@ def train_epoch(model, data_loader, optimizer, criterion):
     model.train()
     losses = []
     for batch in tqdm(data_loader):
-        input_ids = batch['input_ids'].cuda()
-        attention_mask = batch['attention_mask'].cuda()
-        targets = batch['targets'].cuda()
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        targets = batch['targets'].to(device)
 
         optimizer.zero_grad()
         outputs = model(input_ids, attention_mask).squeeze(-1)
@@ -84,9 +89,9 @@ def eval_model(model, data_loader, criterion):
 
     with torch.no_grad():
         for batch in tqdm(data_loader):
-            input_ids = batch['input_ids'].cuda()
-            attention_mask = batch['attention_mask'].cuda()
-            targets = batch['targets'].cuda()
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            targets = batch['targets'].to(device)
 
             outputs = model(input_ids, attention_mask).squeeze(-1)
             loss = criterion(outputs, targets)
@@ -114,7 +119,7 @@ def train_and_evaluate_emotion(emotion, texts, targets, base_model, max_len, bat
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
     # Initialize model, optimizer, and loss function
-    model = IntensityModel(base_model).cuda()
+    model = IntensityModel(base_model).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
@@ -141,8 +146,14 @@ def train_and_evaluate_emotion(emotion, texts, targets, base_model, max_len, bat
 
 # Main Pipeline
 if __name__ == "__main__":
+    # Check for file existence
+    file_path = "trackb_emotions.csv"
+    if not os.path.isfile(file_path):
+        print(f"Error: File '{file_path}' not found. Please check the file path.")
+        exit()
+
     # Load data
-    data = pd.read_csv("trackb_emotions.csv")
+    data = pd.read_csv(file_path)
     texts = data['text'].tolist()
     emotions = ['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']
 

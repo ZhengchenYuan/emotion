@@ -1,0 +1,204 @@
+import pandas as pd
+import numpy as np
+import torch
+import random
+from torch.utils.data import DataLoader, Dataset, random_split
+from transformers import AutoModel, AutoTokenizer
+from torch import nn, optim
+from sklearn.metrics import classification_report
+from tqdm import tqdm
+import os
+
+# Set random seeds for reproducibility
+seed_val = 42
+random.seed(seed_val)
+np.random.seed(seed_val)
+torch.manual_seed(seed_val)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(seed_val)
+
+# Automatically select device (GPU/CPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+###############################
+# Dataset Definition
+###############################
+class EmotionIntensityDataset(Dataset):
+    def __init__(self, texts, targets, tokenizer, max_len):
+        self.texts = texts
+        self.targets = targets
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+        target = self.targets[idx]  # shape: (5,) each in [0,1,2,3]
+        encoding = self.tokenizer(
+            text,
+            truncation=True,
+            padding='max_length',
+            max_length=self.max_len,
+            return_tensors='pt'
+        )
+        return {
+            'input_ids': encoding['input_ids'].squeeze(0),
+            'attention_mask': encoding['attention_mask'].squeeze(0),
+            'targets': torch.tensor(target, dtype=torch.long)
+        }
+
+###############################
+# Model Definition
+###############################
+class MultiEmotionModel(nn.Module):
+    def __init__(self, base_model_name, num_emotions=5, num_classes=4, dropout_rate=0.3):
+        super(MultiEmotionModel, self).__init__()
+        self.bert = AutoModel.from_pretrained(base_model_name)
+        self.dropout = nn.Dropout(dropout_rate)
+        # total output logits: num_emotions * num_classes = 5 * 4 = 20
+        self.output = nn.Linear(self.bert.config.hidden_size, num_emotions * num_classes)
+        self.num_emotions = num_emotions
+        self.num_classes = num_classes
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        pooled_output = outputs.pooler_output
+        output = self.dropout(pooled_output)
+        logits = self.output(output)  # (batch_size, 20)
+        # reshape to (batch_size, 5, 4)
+        logits = logits.view(-1, self.num_emotions, self.num_classes)
+        return logits
+
+###############################
+# Training & Evaluation
+###############################
+def train_epoch(model, data_loader, optimizer, criterion):
+    model.train()
+    losses = []
+    for batch in tqdm(data_loader, desc="Training"):
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        targets = batch['targets'].to(device)  # shape: (batch_size, 5)
+
+        optimizer.zero_grad()
+        outputs = model(input_ids, attention_mask)  # (batch_size, 5, 4)
+        
+        # Calculate loss for each emotion separately
+        # outputs[:, i, :] -> logits for emotion i, shape: (batch,4)
+        # targets[:, i] -> true label for emotion i
+        loss = 0
+        for i in range(outputs.shape[1]):
+            loss += criterion(outputs[:, i, :], targets[:, i])
+        loss = loss / outputs.shape[1]
+
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+    return np.mean(losses)
+
+def eval_model(model, data_loader, criterion):
+    model.eval()
+    losses = []
+    all_preds = []
+    all_targets = []
+    with torch.no_grad():
+        for batch in tqdm(data_loader, desc="Evaluating"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            targets = batch['targets'].to(device)
+
+            outputs = model(input_ids, attention_mask) # (batch, 5, 4)
+            loss = 0
+            for i in range(outputs.shape[1]):
+                loss += criterion(outputs[:, i, :], targets[:, i])
+            loss = loss / outputs.shape[1]
+            losses.append(loss.item())
+
+            # predictions
+            # 对每个情绪选择4类中概率最高的类
+            preds = torch.argmax(outputs, dim=2)  # (batch, 5)
+            all_preds.append(preds.cpu().numpy())
+            all_targets.append(targets.cpu().numpy())
+
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_targets = np.concatenate(all_targets, axis=0)
+    return np.mean(losses), all_preds, all_targets
+
+###############################
+# Main Training Pipeline
+###############################
+if __name__ == "__main__":
+    # Check for file existence
+    file_path = "trackb_emotions.csv"
+    if not os.path.isfile(file_path):
+        print(f"Error: File '{file_path}' not found. Please check the file path.")
+        exit()
+
+    # Load data
+    data = pd.read_csv(file_path)
+    # Assuming columns: text, Anger, Fear, Joy, Sadness, Surprise
+    # Each emotion column has values in {0,1,2,3}
+    texts = data['text'].tolist()
+    emotions = ['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']
+    targets = data[emotions].values  # shape: (num_samples, 5)
+
+    # Split data into train/val/test (示例分法，可根据需要修改)
+    # 假设: 前 80% 训练，10% 验证，10% 测试
+    num_samples = len(texts)
+    train_size = int(0.8 * num_samples)
+    val_size = int(0.1 * num_samples)
+    test_size = num_samples - train_size - val_size
+
+    train_texts = texts[:train_size]
+    train_targets = targets[:train_size]
+
+    val_texts = texts[train_size:train_size+val_size]
+    val_targets = targets[train_size:train_size+val_size]
+
+    test_texts = texts[train_size+val_size:]
+    test_targets = targets[train_size+val_size:]
+
+    # Parameters
+    MAX_LEN = 128
+    BATCH_SIZE = 16
+    EPOCHS = 3
+    BASE_MODEL = 'bert-base-uncased'
+    LEARNING_RATE = 2e-5
+
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+    train_dataset = EmotionIntensityDataset(train_texts, train_targets, tokenizer, MAX_LEN)
+    val_dataset = EmotionIntensityDataset(val_texts, val_targets, tokenizer, MAX_LEN)
+    test_dataset = EmotionIntensityDataset(test_texts, test_targets, tokenizer, MAX_LEN)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
+
+    model = MultiEmotionModel(BASE_MODEL).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    criterion = nn.CrossEntropyLoss()
+
+    best_val_loss = float('inf')
+    for epoch in range(EPOCHS):
+        print(f"Epoch {epoch+1}/{EPOCHS}")
+        train_loss = train_epoch(model, train_loader, optimizer, criterion)
+        val_loss, val_preds, val_targets_out = eval_model(model, val_loader, criterion)
+        print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+
+        if val_loss < best_val_loss:
+            torch.save(model.state_dict(), 'best_model_trackb.pth')
+            best_val_loss = val_loss
+
+    # Load best model and evaluate on test set
+    model.load_state_dict(torch.load('best_model_trackb.pth'))
+    test_loss, test_preds, test_targets_out = eval_model(model, test_loader, criterion)
+    print(f"Test Loss: {test_loss:.4f}")
+
+    # Calculate classification report for each emotion separately
+    # test_preds/test_targets_out shape: (num_test_samples, 5)
+    for i, emotion in enumerate(emotions):
+        print(f"Classification Report for {emotion}:")
+        print(classification_report(test_targets_out[:, i], test_preds[:, i], zero_division=0))

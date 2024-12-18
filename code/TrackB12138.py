@@ -33,8 +33,8 @@ for emotion in target_emotions:
     y_train = train_data[emotion]
     y_test = test_data[emotion]
     
-    # Train a logistic regression model
-    model = LogisticRegression(max_iter=1000)
+    # Train a logistic regression model with balanced class weights
+    model = LogisticRegression(max_iter=1000, class_weight='balanced')
     model.fit(X_train, y_train)
     print(f"Model trained for {emotion}.")
     

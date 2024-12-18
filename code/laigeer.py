@@ -1,6 +1,6 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import BertTokenizer, BertForSequenceClassification, AdamW
@@ -10,14 +10,14 @@ import torch.nn.functional as F
 file_path = "eng(b).csv"  # 修改为你的CSV路径
 df = pd.read_csv(file_path)
 
-# Step 2: Prepare Dataset (Ensure intensity levels 0,1,2,3 exist)
-df = df[['text', 'Joy']]  # 假设选 Joy 强度列作为示例，可以遍历其他情绪
-df = df[df['Joy'].isin([0, 1, 2, 3])]  # 过滤有效强度
+# Step 2: Define Emotion and Process Data
+emotion = 'Joy'  # 选择情绪列: 'Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'
+df = df[['text', emotion]]
 
 # Step 3: Split Data
 train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
-# Step 4: Create Dataset Class
+# Step 4: Dataset Class for BERT
 class EmotionDataset(Dataset):
     def __init__(self, texts, labels, tokenizer, max_length=128):
         self.texts = texts
@@ -44,11 +44,11 @@ class EmotionDataset(Dataset):
 
 # Step 5: Initialize Tokenizer and Model
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=4)  # 0,1,2,3
+model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=4)  # 4强度级别：0, 1, 2, 3
 
-# Step 6: DataLoaders
-train_dataset = EmotionDataset(train_df['text'].tolist(), train_df['Joy'].tolist(), tokenizer)
-test_dataset = EmotionDataset(test_df['text'].tolist(), test_df['Joy'].tolist(), tokenizer)
+# Step 6: Prepare DataLoaders
+train_dataset = EmotionDataset(train_df['text'].tolist(), train_df[emotion].tolist(), tokenizer)
+test_dataset = EmotionDataset(test_df['text'].tolist(), test_df[emotion].tolist(), tokenizer)
 
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -88,10 +88,10 @@ def evaluate_model(model, dataloader):
             true_labels.extend(labels.cpu().numpy())
     return predictions, true_labels
 
-# Step 9: Train and Evaluate
+# Step 9: Train and Evaluate Model
 train_model(model, train_loader, epochs=2)
 predictions, true_labels = evaluate_model(model, test_loader)
 
 # Step 10: Output Results
-print("Classification Report:")
+print(f"\nClassification Report for {emotion}:")
 print(classification_report(true_labels, predictions, digits=4))

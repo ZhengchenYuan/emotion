@@ -64,8 +64,8 @@ for emotion in target_emotions:
         final_predictions = np.zeros(len(y_test), dtype=int)
     
     # Append true and predicted labels
-    true_labels.append(y_test.values)
-    predicted_labels.append(final_predictions)
+    true_labels.append(y_test.values.astype(int))
+    predicted_labels.append(final_predictions.astype(int))
 
 # Combine true and predicted labels for display
 final_predictions_df['True_Labels'] = list(map(list, zip(*true_labels)))
@@ -74,4 +74,4 @@ final_predictions_df['Predicted_Labels'] = list(map(list, zip(*predicted_labels)
 # 6. Display final results
 print("\nFinal comparison of predictions and true labels for all emotions:")
 for i, row in final_predictions_df.iterrows():
-    print(f"Text: {row['text']}\nTrue Labels: {row['True_Labels']}\nPredicted Labels: {row['Predicted_Labels']}\n")
+    print(f"Text: {row['text']}\nTrue Labels: {[int(label) for label in row['True_Labels']]}\nPredicted Labels: {[int(label) for label in row['Predicted_Labels']]}\n")

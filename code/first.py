@@ -18,7 +18,7 @@ target_emotions = ['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']
 
 # 3. Split data into training and test sets (90% training, 10% test)
 train_data, test_data = train_test_split(data, test_size=0.1, random_state=42)
-test_data = test_data.sample(20, random_state=42).reset_index(drop=True)  # Select 20 test samples
+test_data = test_data.sample(50, random_state=42).reset_index(drop=True)  # Select 20 test samples
 
 # 4. Use TF-IDF to vectorize the text column
 vectorizer = TfidfVectorizer(max_features=500)
@@ -73,5 +73,4 @@ final_predictions_df['Predicted_Labels'] = list(map(list, zip(*predicted_labels)
 
 # 6. Display final results
 print("\nFinal comparison of predictions and true labels for all emotions:")
-for i, row in final_predictions_df.iterrows():
-    print(f"Text: {row['text']}\nTrue Labels: {[int(label) for label in row['True_Labels']]}\nPredicted Labels: {[int(label) for label in row['Predicted_Labels']]}\n")
+print(final_predictions_df[['text', 'True_Labels', 'Predicted_Labels']])

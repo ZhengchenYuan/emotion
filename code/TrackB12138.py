@@ -18,6 +18,7 @@ target_emotions = ['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']
 
 # 3. Split data into training and test sets (90% training, 10% test)
 train_data, test_data = train_test_split(data, test_size=0.1, random_state=42)
+test_data = test_data.sample(20, random_state=42).reset_index(drop=True)  # Select 20 test samples
 
 # 4. Use TF-IDF to vectorize the text column
 vectorizer = TfidfVectorizer(max_features=500)
@@ -25,8 +26,9 @@ X_train = vectorizer.fit_transform(train_data['text']).toarray()
 X_test = vectorizer.transform(test_data['text']).toarray()
 
 # 5. Train a two-stage model with data augmentation for minority classes
-results = {}
-comparison_results = {}
+final_predictions_df = test_data[['text']].copy()
+true_labels = []
+predicted_labels = []
 
 for emotion in target_emotions:
     print(f"\nTraining and evaluating for emotion: {emotion}")
@@ -61,30 +63,18 @@ for emotion in target_emotions:
     else:
         final_predictions = np.zeros(len(y_test))
     
-    # Evaluate results
-    accuracy = accuracy_score(y_test, final_predictions)
-    report = classification_report(y_test, final_predictions, zero_division=0)
-    results[emotion] = {'Accuracy': accuracy, 'Report': report}
-    
-    # Combine predictions for inspection
-    comparison = pd.DataFrame({
-        'Text': test_data['text'],
-        'True_Label': y_test,
-        'Predicted_Label': final_predictions
-    })
-    comparison_results[emotion] = comparison
-    
-    # Show examples with 2 and 3 predictions
-    has_2_or_3 = comparison[comparison['Predicted_Label'].isin([2, 3])]
-    print(f"\nExamples where Predicted_Label is 2 or 3 for {emotion}:")
-    print(has_2_or_3.head(5))
+    # Append true and predicted labels
+    true_labels.append(y_test.values)
+    predicted_labels.append(final_predictions)
 
-# 6. Display overall results
-for emotion in target_emotions:
-    print(f"\nResults for {emotion}:")
-    print(f"Accuracy: {results[emotion]['Accuracy']}")
-    print("Classification Report:")
-    print(results[emotion]['Report'])
-    
-    print("Sample Predictions:")
-    print(comparison_results[emotion].head(10))
+# Combine true and predicted labels for display
+final_predictions_df['True_Labels'] = list(map(list, zip(*true_labels)))
+final_predictions_df['Predicted_Labels'] = list(map(list, zip(*predicted_labels)))
+
+# 6. Display final results
+print("\nFinal comparison of predictions and true labels for all emotions:")
+print(final_predictions_df[['text', 'True_Labels', 'Predicted_Labels']])
+
+# Save to CSV for further analysis (optional)
+final_predictions_df.to_csv('final_emotion_predictions.csv', index=False)
+print("Results saved to final_emotion_predictions.csv")

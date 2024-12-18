@@ -1,8 +1,9 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
-from mord import OrdinalRidge
-from sklearn.metrics import mean_squared_error, accuracy_score, classification_report
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils import resample
+from sklearn.metrics import accuracy_score, classification_report
 import numpy as np
 
 # 1. Load the dataset
@@ -23,7 +24,7 @@ vectorizer = TfidfVectorizer(max_features=500)
 X_train = vectorizer.fit_transform(train_data['text']).toarray()
 X_test = vectorizer.transform(test_data['text']).toarray()
 
-# 5. Train and evaluate an Ordinal Regression model for each emotion
+# 5. Train a two-stage model with data augmentation for minority classes
 results = {}
 comparison_results = {}
 
@@ -34,28 +35,46 @@ for emotion in target_emotions:
     y_train = train_data[emotion]
     y_test = test_data[emotion]
     
-    # Train an Ordinal Regression model
-    model = OrdinalRidge()
-    model.fit(X_train, y_train)
+    # Stage 1: Predict binary outcome (0 vs >0)
+    y_train_binary = (y_train > 0).astype(int)
     
-    # Predict on test set
-    y_pred = model.predict(X_test)
-    y_pred_rounded = np.round(y_pred).clip(min=0, max=3)  # Ensure values are in 0-3 range
+    # Resample the data to balance classes
+    X_resampled, y_resampled = resample(X_train, y_train_binary, random_state=42)
     
-    # Calculate accuracy and classification report
-    accuracy = accuracy_score(y_test, y_pred_rounded)
-    report = classification_report(y_test, y_pred_rounded, zero_division=0)
+    stage1_model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
+    stage1_model.fit(X_resampled, y_resampled)
+    y_pred_binary = stage1_model.predict(X_test)
+    
+    # Stage 2: Predict intensities (1, 2, 3) for non-zero samples
+    X_train_stage2 = X_train[y_train > 0]
+    y_train_stage2 = y_train[y_train > 0]
+    X_test_stage2 = X_test[y_pred_binary > 0]
+
+    if X_test_stage2.shape[0] > 0:
+        stage2_model = RandomForestClassifier(n_estimators=200, random_state=42, class_weight='balanced')
+        stage2_model.fit(X_train_stage2, y_train_stage2)
+        y_pred_stage2 = stage2_model.predict(X_test_stage2)
+        
+        # Combine results
+        final_predictions = np.zeros(len(y_test))
+        final_predictions[y_pred_binary > 0] = y_pred_stage2
+    else:
+        final_predictions = np.zeros(len(y_test))
+    
+    # Evaluate results
+    accuracy = accuracy_score(y_test, final_predictions)
+    report = classification_report(y_test, final_predictions, zero_division=0)
     results[emotion] = {'Accuracy': accuracy, 'Report': report}
     
-    # Combine predictions with true values for comparison
+    # Combine predictions for inspection
     comparison = pd.DataFrame({
         'Text': test_data['text'],
         'True_Label': y_test,
-        'Predicted_Label': y_pred_rounded
+        'Predicted_Label': final_predictions
     })
     comparison_results[emotion] = comparison
     
-    # Check for predicted values of 2 and 3
+    # Show examples with 2 and 3 predictions
     has_2_or_3 = comparison[comparison['Predicted_Label'].isin([2, 3])]
     print(f"\nExamples where Predicted_Label is 2 or 3 for {emotion}:")
     print(has_2_or_3.head(5))

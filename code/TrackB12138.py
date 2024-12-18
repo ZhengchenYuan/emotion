@@ -1,8 +1,9 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report
+from mord import OrdinalRidge
+from sklearn.metrics import mean_squared_error, accuracy_score, classification_report
+import numpy as np
 
 # 1. Load the dataset
 file_path = 'eng.csv'  # 请确保数据集路径正确
@@ -19,10 +20,10 @@ train_data, test_data = train_test_split(data, test_size=0.1, random_state=42)
 
 # 4. Use TF-IDF to vectorize the text column
 vectorizer = TfidfVectorizer(max_features=500)
-X_train = vectorizer.fit_transform(train_data['text'])
-X_test = vectorizer.transform(test_data['text'])
+X_train = vectorizer.fit_transform(train_data['text']).toarray()
+X_test = vectorizer.transform(test_data['text']).toarray()
 
-# 5. Train and evaluate a model for each emotion
+# 5. Train and evaluate an Ordinal Regression model for each emotion
 results = {}
 comparison_results = {}
 
@@ -33,27 +34,32 @@ for emotion in target_emotions:
     y_train = train_data[emotion]
     y_test = test_data[emotion]
     
-    # Train a logistic regression model with balanced class weights
-    model = LogisticRegression(max_iter=1000, class_weight='balanced')
+    # Train an Ordinal Regression model
+    model = OrdinalRidge()
     model.fit(X_train, y_train)
-    print(f"Model trained for {emotion}.")
     
-    # Make predictions
+    # Predict on test set
     y_pred = model.predict(X_test)
+    y_pred_rounded = np.round(y_pred).clip(min=0, max=3)  # Ensure values are in 0-3 range
     
     # Calculate accuracy and classification report
-    accuracy = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred)
+    accuracy = accuracy_score(y_test, y_pred_rounded)
+    report = classification_report(y_test, y_pred_rounded, zero_division=0)
     results[emotion] = {'Accuracy': accuracy, 'Report': report}
     
     # Combine predictions with true values for comparison
     comparison = pd.DataFrame({
         'Text': test_data['text'],
         'True_Label': y_test,
-        'Predicted_Label': y_pred
+        'Predicted_Label': y_pred_rounded
     })
     comparison_results[emotion] = comparison
     
+    # Check for predicted values of 2 and 3
+    has_2_or_3 = comparison[comparison['Predicted_Label'].isin([2, 3])]
+    print(f"\nExamples where Predicted_Label is 2 or 3 for {emotion}:")
+    print(has_2_or_3.head(5))
+
 # 6. Display overall results
 for emotion in target_emotions:
     print(f"\nResults for {emotion}:")

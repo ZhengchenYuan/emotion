@@ -58,10 +58,10 @@ for emotion in target_emotions:
         y_pred_stage2 = stage2_model.predict(X_test_stage2)
         
         # Combine results
-        final_predictions = np.zeros(len(y_test))
-        final_predictions[y_pred_binary > 0] = y_pred_stage2
+        final_predictions = np.zeros(len(y_test), dtype=int)
+        final_predictions[y_pred_binary > 0] = y_pred_stage2.astype(int)
     else:
-        final_predictions = np.zeros(len(y_test))
+        final_predictions = np.zeros(len(y_test), dtype=int)
     
     # Append true and predicted labels
     true_labels.append(y_test.values)
@@ -73,8 +73,5 @@ final_predictions_df['Predicted_Labels'] = list(map(list, zip(*predicted_labels)
 
 # 6. Display final results
 print("\nFinal comparison of predictions and true labels for all emotions:")
-print(final_predictions_df[['text', 'True_Labels', 'Predicted_Labels']])
-
-# Save to CSV for further analysis (optional)
-final_predictions_df.to_csv('final_emotion_predictions.csv', index=False)
-print("Results saved to final_emotion_predictions.csv")
+for i, row in final_predictions_df.iterrows():
+    print(f"Text: {row['text']}\nTrue Labels: {row['True_Labels']}\nPredicted Labels: {row['Predicted_Labels']}\n")

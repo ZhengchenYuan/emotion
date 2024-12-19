@@ -8,7 +8,6 @@ import numpy as np
 
 # 1. Load the dataset
 file_path = 'eng(b).csv'  # 请确保数据集路径正确
-
 data = pd.read_csv(file_path)
 print("Dataset Loaded Successfully!")
 print(data.head())
@@ -16,9 +15,9 @@ print(data.head())
 # 2. Define emotions to predict
 target_emotions = ['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']
 
-# 3. Split data into training and test sets (90% training, 10% test)
-train_data, test_data = train_test_split(data, test_size=0.1, random_state=42)
-test_data = test_data.sample(50, random_state=42).reset_index(drop=True)  # Select 20 test samples
+# 3. Split data into training and test sets
+train_data = data.iloc[:2000]  # 前 2000 条数据作为训练集
+test_data = data.iloc[2000:].reset_index(drop=True)  # 剩余数据作为测试集，并重置索引
 
 # 4. Use TF-IDF to vectorize the text column
 vectorizer = TfidfVectorizer(max_features=500)
@@ -86,5 +85,33 @@ output_file_path = 'emotion_predictions_cleaned_results.csv'
 final_predictions_df[['text', 'True_Labels', 'Predicted_Labels']].to_csv(output_file_path, index=False)
 
 print(f"Results saved to {output_file_path}")
+
+# 7. Calculate the number of matching labels between True_Labels and Predicted_Labels
+matches = 0  # 计数完全匹配的样本
+total_samples = len(final_predictions_df)
+
+# 遍历每一行，检查 True_Labels 和 Predicted_Labels 是否完全相等
+for _, row in final_predictions_df.iterrows():
+    true = list(map(int, row['True_Labels'].split(',')))
+    pred = list(map(int, row['Predicted_Labels'].split(',')))
+    if true == pred:
+        matches += 1
+
+# 计算匹配率
+match_rate = matches / total_samples * 100
+
+# 打印结果
+print(f"\nNumber of samples where predicted labels match true labels: {matches}/{total_samples}")
+print(f"Match rate: {match_rate:.2f}%")
+
+# 添加到结果文件
+final_predictions_df['Match'] = final_predictions_df.apply(
+    lambda row: 1 if list(map(int, row['True_Labels'].split(','))) == list(map(int, row['Predicted_Labels'].split(','))) else 0,
+    axis=1
+)
+
+# 保存更新后的结果文件
+final_predictions_df.to_csv(output_file_path, index=False)
+print(f"Updated results with match information saved to {output_file_path}")
 
 

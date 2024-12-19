@@ -73,4 +73,18 @@ final_predictions_df['Predicted_Labels'] = list(map(list, zip(*predicted_labels)
 
 # 6. Display final results
 print("\nFinal comparison of predictions and true labels for all emotions:")
-print(final_predictions_df[['text', 'True_Labels', 'Predicted_Labels']])
+# Convert True_Labels and Predicted_Labels into list format (if they are strings)
+final_predictions_df['True_Labels'] = final_predictions_df['True_Labels'].apply(lambda x: [int(i) for i in x.strip('[]').split(',')] if isinstance(x, str) else x)
+final_predictions_df['Predicted_Labels'] = final_predictions_df['Predicted_Labels'].apply(lambda x: [int(i) for i in x.strip('[]').split(',')] if isinstance(x, str) else x)
+
+# Ensure True_Labels and Predicted_Labels are formatted as comma-separated strings
+final_predictions_df['True_Labels'] = final_predictions_df['True_Labels'].apply(lambda x: ','.join(map(str, x)))
+final_predictions_df['Predicted_Labels'] = final_predictions_df['Predicted_Labels'].apply(lambda x: ','.join(map(str, x)))
+
+# Save the cleaned results to a CSV file
+output_file_path = 'emotion_predictions_cleaned_results.csv'
+final_predictions_df[['text', 'True_Labels', 'Predicted_Labels']].to_csv(output_file_path, index=False)
+
+print(f"Results saved to {output_file_path}")
+
+

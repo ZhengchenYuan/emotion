@@ -1,5 +1,5 @@
 import pandas as pd
-from sklearn.metrics import classification_report, f1_score
+from sklearn.metrics import classification_report, f1_score, accuracy_score
 from transformers import BertTokenizer, BertModel
 import torch
 from torch import nn, optim
@@ -58,7 +58,7 @@ data = pd.read_csv("eng(a).csv")
 # Step 1: Prepare the data
 train_data = data.iloc[:100]
 dev_data = data.iloc[100:120]
-test_data = data.iloc[120:130]
+test_data = data.iloc[120:180]
 
 X_train = train_data['text']
 y_train = train_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
@@ -158,11 +158,39 @@ with torch.no_grad():
 predictions = np.vstack(predictions)
 true_values = np.vstack(true_values)
 
-# Display predictions vs true values
-predictions_df = pd.DataFrame(predictions, columns=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'])
-true_values_df = pd.DataFrame(true_values, columns=['Anger_True', 'Fear_True', 'Joy_True', 'Sadness_True', 'Surprise_True'])
+# Step 7: Calculate accuracy
+accuracy = accuracy_score(true_values.flatten(), predictions.flatten())
+print(f"Test Accuracy: {accuracy:.2f}")
 
-results_comparison = pd.concat([predictions_df, true_values_df], axis=1)
+# Step 8: Calculate matching labels
+predictions_str = [','.join(map(str, pred.astype(int))) for pred in predictions]
+true_values_str = [','.join(map(str, true.astype(int))) for true in true_values]
 
-print("Predictions vs True Values:")
-print(results_comparison)
+final_predictions_df = pd.DataFrame({
+    'Predicted_Labels': predictions_str,
+    'True_Labels': true_values_str
+})
+
+matches = 0
+for _, row in final_predictions_df.iterrows():
+    true = list(map(int, row['True_Labels'].split(',')))
+    pred = list(map(int, row['Predicted_Labels'].split(',')))
+    if true == pred:
+        matches += 1
+
+total_samples = len(final_predictions_df)
+match_rate = matches / total_samples * 100
+
+print(f"\nNumber of samples where predicted labels match true labels: {matches}/{total_samples}")
+print(f"Match rate: {match_rate:.2f}%")
+
+# Add match information to DataFrame
+final_predictions_df['Match'] = final_predictions_df.apply(
+    lambda row: 1 if list(map(int, row['True_Labels'].split(','))) == list(map(int, row['Predicted_Labels'].split(','))) else 0,
+    axis=1
+)
+
+# Save results to CSV
+output_file_path = "results_comparison_with_matches.csv"
+final_predictions_df.to_csv(output_file_path, index=False)
+print(f"Updated results with match information saved to {output_file_path}")

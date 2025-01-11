@@ -85,6 +85,9 @@ class Generator(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+# Select device (GPU if available, otherwise CPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Load the data
 data = pd.read_csv("eng(a).csv")
 
@@ -178,4 +181,44 @@ for epoch in range(3):
         loss.backward()
         optimizer.step()
 
-# Continue with threshold tuning and evaluation as in the previous implementation.
+# Testing and evaluation
+model.eval()
+
+# Store predictions and true labels
+predictions = []
+true_labels = []
+
+with torch.no_grad():
+    for batch in test_loader:
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)
+
+        # Get model predictions
+        outputs = model(input_ids, attention_mask)
+        preds = torch.sigmoid(outputs)  # Convert logits to probabilities
+        predictions.append(preds.cpu().numpy())
+        true_labels.append(labels.cpu().numpy())
+
+# Convert predictions and true labels to numpy arrays
+predictions = np.vstack(predictions)
+true_labels = np.vstack(true_labels)
+
+# Apply threshold to convert probabilities to binary predictions
+threshold = 0.5
+binary_predictions = (predictions > threshold).astype(int)
+
+# Compare predictions and true labels
+for i in range(len(binary_predictions)):
+    print(f"Sample {i+1}:")
+    print(f"Predicted: {binary_predictions[i]}")
+    print(f"Actual: {true_labels[i]}")
+    print()
+
+# Calculate and print evaluation metrics
+print("Classification Report:")
+print(classification_report(true_labels, binary_predictions, target_names=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']))
+
+# Calculate F1 score
+f1 = f1_score(true_labels, binary_predictions, average='macro')
+print(f"Macro F1 Score: {f1:.4f}")

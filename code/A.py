@@ -222,3 +222,11 @@ print(classification_report(true_labels, binary_predictions, target_names=['Ange
 # Calculate F1 score
 f1 = f1_score(true_labels, binary_predictions, average='macro')
 print(f"Macro F1 Score: {f1:.4f}")
+
+# Calculate and print match rate
+matches = np.sum(binary_predictions == true_labels)
+total_elements = binary_predictions.size
+match_rate = matches / total_elements
+
+print(f"Match Rate: {match_rate:.4f} ({matches}/{total_elements})")
+

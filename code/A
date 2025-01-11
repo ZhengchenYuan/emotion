@@ -1,0 +1,192 @@
+import pandas as pd
+from sklearn.metrics import classification_report, f1_score, accuracy_score
+from transformers import BertTokenizer, BertModel
+import torch
+from torch import nn, optim
+from torch.utils.data import DataLoader, Dataset
+import numpy as np
+
+# Define custom dataset class
+class EmotionDataset(Dataset):
+    def __init__(self, texts, labels, tokenizer, max_len):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, item):
+        text = self.texts[item]
+        label = self.labels.iloc[item]
+
+        encoding = self.tokenizer(
+            text,
+            max_length=self.max_len,
+            padding='max_length',
+            truncation=True,
+            return_tensors="pt"
+        )
+
+        return {
+            'text': text,
+            'input_ids': encoding['input_ids'].squeeze(0),
+            'attention_mask': encoding['attention_mask'].squeeze(0),
+            'labels': torch.tensor(label.values, dtype=torch.float)
+        }
+
+# Define the BERT-based model
+class EmotionClassifier(nn.Module):
+    def __init__(self, n_classes):
+        super(EmotionClassifier, self).__init__()
+        self.bert = BertModel.from_pretrained('bert-base-uncased')
+        self.dropout = nn.Dropout(0.3)
+        self.out = nn.Linear(self.bert.config.hidden_size, n_classes)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+        output = self.dropout(outputs.pooler_output)
+        return self.out(output)
+
+# Define the GAN generator
+class Generator(nn.Module):
+    def __init__(self, noise_dim, output_dim):
+        super(Generator, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(noise_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim),
+            nn.Tanh()
+        )
+
+    def forward(self, noise):
+        return self.fc(noise)
+
+# Define the GAN discriminator
+class Discriminator(nn.Module):
+    def __init__(self, input_dim):
+        super(Discriminator, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, data):
+        return self.fc(data)
+
+# Load the data
+data = pd.read_csv("eng(a).csv")
+
+# Step 1: Prepare the data
+train_data = data.iloc[:100]
+dev_data = data.iloc[100:120]
+test_data = data.iloc[120:180]
+
+X_train = train_data['text']
+y_train = train_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
+X_dev = dev_data['text']
+y_dev = dev_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
+X_test = test_data['text']
+y_test = test_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
+
+# Step 2: Tokenization
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+MAX_LEN = 128
+
+train_dataset = EmotionDataset(X_train.tolist(), y_train, tokenizer, MAX_LEN)
+dev_dataset = EmotionDataset(X_dev.tolist(), y_dev, tokenizer, MAX_LEN)
+test_dataset = EmotionDataset(X_test.tolist(), y_test, tokenizer, MAX_LEN)
+
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+dev_loader = DataLoader(dev_dataset, batch_size=16)
+test_loader = DataLoader(test_dataset, batch_size=16)
+
+# Step 3: Initialize models
+noise_dim = 100  # Dimension of noise vector for the generator
+output_dim = y_train.shape[1]  # Number of output labels
+
+generator = Generator(noise_dim, output_dim).to(device)
+discriminator = Discriminator(output_dim).to(device)
+
+bert_model = EmotionClassifier(n_classes=5).to(device)
+
+# Optimizers
+gen_optimizer = optim.Adam(generator.parameters(), lr=1e-4)
+dis_optimizer = optim.Adam(discriminator.parameters(), lr=1e-4)
+bert_optimizer = optim.Adam(bert_model.parameters(), lr=2e-5)
+
+# Loss functions
+adversarial_loss = nn.BCELoss()
+criterion = nn.BCEWithLogitsLoss()
+
+# Training GAN
+for epoch in range(50):
+    generator.train()
+    discriminator.train()
+
+    for batch in train_loader:
+        # Real labels
+        real_labels = batch['labels'].to(device)
+
+        # Train Discriminator
+        noise = torch.randn(batch['labels'].size(0), noise_dim).to(device)
+        fake_labels = generator(noise)
+
+        real_validity = discriminator(real_labels)
+        fake_validity = discriminator(fake_labels.detach())
+
+        real_loss = adversarial_loss(real_validity, torch.ones_like(real_validity))
+        fake_loss = adversarial_loss(fake_validity, torch.zeros_like(fake_validity))
+        d_loss = (real_loss + fake_loss) / 2
+
+        dis_optimizer.zero_grad()
+        d_loss.backward()
+        dis_optimizer.step()
+
+        # Train Generator
+        fake_validity = discriminator(fake_labels)
+        g_loss = adversarial_loss(fake_validity, torch.ones_like(fake_validity))
+
+        gen_optimizer.zero_grad()
+        g_loss.backward()
+        gen_optimizer.step()
+
+    print(f"Epoch {epoch + 1} | D Loss: {d_loss.item():.4f} | G Loss: {g_loss.item():.4f}")
+
+# Integrate BERT with synthetic data
+synthetic_data = []
+generator.eval()
+with torch.no_grad():
+    for _ in range(100):
+        noise = torch.randn(1, noise_dim).to(device)
+        synthetic_data.append(generator(noise).cpu().numpy())
+
+synthetic_data = np.vstack(synthetic_data)
+synthetic_labels = pd.DataFrame(synthetic_data, columns=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise'])
+synthetic_texts = ["Generated sample text" for _ in range(synthetic_data.shape[0])]
+
+synthetic_dataset = EmotionDataset(synthetic_texts, synthetic_labels, tokenizer, MAX_LEN)
+synthetic_loader = DataLoader(synthetic_dataset, batch_size=16)
+
+# Fine-tune BERT with synthetic data
+bert_model.train()
+for epoch in range(3):
+    for batch in synthetic_loader:
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)
+
+        outputs = bert_model(input_ids, attention_mask)
+        loss = criterion(outputs, labels)
+
+        bert_optimizer.zero_grad()
+        loss.backward()
+        bert_optimizer.step()
+
+    print(f"BERT Fine-tune Epoch {epoch + 1} | Loss: {loss.item():.4f}")

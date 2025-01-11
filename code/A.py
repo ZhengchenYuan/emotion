@@ -6,6 +6,8 @@ from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Define custom dataset class
 class EmotionDataset(Dataset):
     def __init__(self, texts, labels, tokenizer, max_len):

@@ -1,10 +1,12 @@
 import pandas as pd
-from sklearn.metrics import classification_report, f1_score, accuracy_score
+from sklearn.metrics import classification_report, f1_score
 from transformers import BertTokenizer, BertModel
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Define custom dataset class
 class EmotionDataset(Dataset):
@@ -52,13 +54,47 @@ class EmotionClassifier(nn.Module):
         output = self.dropout(outputs.pooler_output)
         return self.out(output)
 
+# Define GAN components
+class Discriminator(nn.Module):
+    def __init__(self, input_dim):
+        super(Discriminator, self).__init__()
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.LeakyReLU(0.2),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(0.2),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+class Generator(nn.Module):
+    def __init__(self, noise_dim, output_dim):
+        super(Generator, self).__init__()
+        self.model = nn.Sequential(
+            nn.Linear(noise_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim),
+            nn.Tanh()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+# Select device (GPU if available, otherwise CPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Load the data
-data = pd.read_csv("eng(a).csv")
+data = pd.read_csv(r"C:\Users\ziyue\nlp\emotion\eng(a).csv")
 
 # Step 1: Prepare the data
-train_data = data.iloc[:100]
-dev_data = data.iloc[100:120]
-test_data = data.iloc[120:180]
+train_data = data.iloc[:800] 
+dev_data = data.iloc[800:1200]
+test_data = data.iloc[1200:16 00]
 
 X_train = train_data['text']
 y_train = train_data[['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']]
@@ -79,18 +115,60 @@ train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 dev_loader = DataLoader(dev_dataset, batch_size=16)
 test_loader = DataLoader(test_dataset, batch_size=16)
 
-# Step 3: Initialize the model
-model = EmotionClassifier(n_classes=5)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = model.to(device)
+# Initialize GAN
+NOISE_DIM = 100
+LABEL_DIM = 5
+generator = Generator(NOISE_DIM, LABEL_DIM).to(device)
+discriminator = Discriminator(LABEL_DIM).to(device)
 
-# Step 4: Training setup
-EPOCHS = 3
+optimizer_G = optim.Adam(generator.parameters(), lr=1e-4)
+optimizer_D = optim.Adam(discriminator.parameters(), lr=1e-4)
+criterion_gan = nn.BCELoss()
+
+# Train GAN
+for epoch in range(100):  # Simplified GAN training loop
+    for batch in train_loader:
+        # Train Discriminator
+        real_labels = batch['labels'].to(device)
+        batch_size = real_labels.size(0)
+        noise = torch.randn(batch_size, NOISE_DIM).to(device)
+        fake_labels = generator(noise)
+
+        real_targets = torch.ones(batch_size, 1).to(device)
+        fake_targets = torch.zeros(batch_size, 1).to(device)
+
+        optimizer_D.zero_grad()
+        real_loss = criterion_gan(discriminator(real_labels), real_targets)
+        fake_loss = criterion_gan(discriminator(fake_labels.detach()), fake_targets)
+        loss_D = real_loss + fake_loss
+        loss_D.backward()
+        optimizer_D.step()
+
+        # Train Generator
+        optimizer_G.zero_grad()
+        generated_targets = torch.ones(batch_size, 1).to(device)
+        loss_G = criterion_gan(discriminator(fake_labels), generated_targets)
+        loss_G.backward()
+        optimizer_G.step()
+
+# Use GAN-enhanced labels for training classifier
+enhanced_labels = []
+generator.eval()
+with torch.no_grad():
+    for batch in train_loader:
+        noise = torch.randn(len(batch['labels']), NOISE_DIM).to(device)
+        enhanced_labels.append(generator(noise).cpu().numpy())
+
+enhanced_labels = np.vstack(enhanced_labels)
+X_train = np.hstack([X_train.values.reshape(-1, 1), enhanced_labels])
+
+# Initialize the Emotion Classifier
+model = EmotionClassifier(n_classes=5).to(device)
 optimizer = optim.Adam(model.parameters(), lr=2e-5)
 criterion = nn.BCEWithLogitsLoss()
 
-# Training loop
-for epoch in range(EPOCHS):
+# Training classifier with enhanced data
+for epoch in range(3):
     model.train()
     for batch in train_loader:
         input_ids = batch['input_ids'].to(device)
@@ -103,45 +181,12 @@ for epoch in range(EPOCHS):
         loss.backward()
         optimizer.step()
 
-# Step 5: Determine best threshold on development set
-def evaluate_threshold(loader, threshold):
-    model.eval()
-    predictions = []
-    true_values = []
-
-    with torch.no_grad():
-        for batch in loader:
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-
-            outputs = model(input_ids, attention_mask)
-            sigmoid_outputs = torch.sigmoid(outputs)
-            binary_predictions = (sigmoid_outputs > threshold).float()
-            predictions.append(binary_predictions.cpu().numpy())
-            true_values.append(labels.cpu().numpy())
-
-    predictions = np.vstack(predictions)
-    true_values = np.vstack(true_values)
-    f1 = f1_score(true_values, predictions, average='micro')
-    return f1
-
-best_threshold = 0.0
-best_f1 = 0.0
-thresholds = np.arange(0.1, 0.9, 0.1)
-
-for threshold in thresholds:
-    f1 = evaluate_threshold(dev_loader, threshold)
-    if f1 > best_f1:
-        best_f1 = f1
-        best_threshold = threshold
-
-print(f"Best threshold: {best_threshold}, Best F1 score: {best_f1}")
-
-# Step 6: Evaluate on test set
+# Testing and evaluation
 model.eval()
+
+# Store predictions and true labels
 predictions = []
-true_values = []
+true_labels = []
 
 with torch.no_grad():
     for batch in test_loader:
@@ -149,48 +194,38 @@ with torch.no_grad():
         attention_mask = batch['attention_mask'].to(device)
         labels = batch['labels'].to(device)
 
+        # Get model predictions
         outputs = model(input_ids, attention_mask)
-        sigmoid_outputs = torch.sigmoid(outputs)
-        binary_predictions = (sigmoid_outputs > best_threshold).float()
-        predictions.append(binary_predictions.cpu().numpy())
-        true_values.append(labels.cpu().numpy())
+        preds = torch.sigmoid(outputs)  # Convert logits to probabilities
+        predictions.append(preds.cpu().numpy())
+        true_labels.append(labels.cpu().numpy())
 
+# Convert predictions and true labels to numpy arrays
 predictions = np.vstack(predictions)
-true_values = np.vstack(true_values)
+true_labels = np.vstack(true_labels)
 
-# Step 7: Calculate accuracy
-accuracy = accuracy_score(true_values.flatten(), predictions.flatten())
-print(f"Test Accuracy: {accuracy:.2f}")
+# Apply threshold to convert probabilities to binary predictions
+threshold = 0.5
+binary_predictions = (predictions > threshold).astype(int)
 
-# Step 8: Calculate matching labels
-predictions_str = [','.join(map(str, pred.astype(int))) for pred in predictions]
-true_values_str = [','.join(map(str, true.astype(int))) for true in true_values]
+# Compare predictions and true labels
+for i in range(len(binary_predictions)):
+    print(f"Sample {i+1}:")
+    print(f"Predicted: {binary_predictions[i]}")
+    print(f"Actual: {true_labels[i]}")
+    print()
 
-final_predictions_df = pd.DataFrame({
-    'Predicted_Labels': predictions_str,
-    'True_Labels': true_values_str
-})
+# Calculate and print evaluation metrics
+print("Classification Report:")
+print(classification_report(true_labels, binary_predictions, target_names=['Anger', 'Fear', 'Joy', 'Sadness', 'Surprise']))
 
-matches = 0
-for _, row in final_predictions_df.iterrows():
-    true = list(map(int, row['True_Labels'].split(',')))
-    pred = list(map(int, row['Predicted_Labels'].split(',')))
-    if true == pred:
-        matches += 1
+# Calculate F1 score
+f1 = f1_score(true_labels, binary_predictions, average='macro')
+print(f"Macro F1 Score: {f1:.4f}")
 
-total_samples = len(final_predictions_df)
-match_rate = matches / total_samples * 100
+# Calculate and print match rate
+matches = np.sum(binary_predictions == true_labels)
+total_elements = binary_predictions.size
+match_rate = matches / total_elements
 
-print(f"\nNumber of samples where predicted labels match true labels: {matches}/{total_samples}")
-print(f"Match rate: {match_rate:.2f}%")
-
-# Add match information to DataFrame
-final_predictions_df['Match'] = final_predictions_df.apply(
-    lambda row: 1 if list(map(int, row['True_Labels'].split(','))) == list(map(int, row['Predicted_Labels'].split(','))) else 0,
-    axis=1
-)
-
-# Save results to CSV
-output_file_path = "results_comparison_with_matches.csv"
-final_predictions_df.to_csv(output_file_path, index=False)
-print(f"Updated results with match information saved to {output_file_path}")
+print(f"Match Rate: {match_rate:.4f} ({matches}/{total_elements})")

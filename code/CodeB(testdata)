@@ -1,0 +1,49 @@
+import pandas as pd
+from sklearn.model_selection import GridSearchCV
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.ensemble import RandomForestClassifier
+import numpy as np
+
+# 读取数据集
+train_data = pd.read_csv(r"C:\Users\Xinyi Huang\Desktop\NLP\public_data_test\track_b\train\eng.csv")  # 训练数据（有 gold labels）
+dev_data = pd.read_csv(r"C:\Users\Xinyi Huang\Desktop\NLP\public_data_test\track_b\dev\eng.csv")      # 开发数据（无 gold labels）
+test_data = pd.read_csv(r"C:\Users\Xinyi Huang\Desktop\NLP\public_data_test\track_b\test\eng.csv")    # 测试数据（无 gold labels）
+
+# 需要预测的情感类别
+target_emotions = ['anger', 'fear', 'joy', 'sadness', 'surprise']
+
+# 使用 TF-IDF 对文本进行向量化
+vectorizer = TfidfVectorizer(max_features=500)
+X_train = vectorizer.fit_transform(train_data['text']).toarray()
+X_dev = vectorizer.transform(dev_data['text']).toarray()
+X_test = vectorizer.transform(test_data['text']).toarray()
+
+# 存储最终预测结果
+dev_predictions_df = dev_data[['text']].copy()
+test_predictions_df = test_data[['text']].copy()
+
+for emotion in target_emotions:
+    print(f"\nTraining model for emotion: {emotion}")
+
+    # 训练集标签（多分类）
+    y_train = train_data[emotion]
+
+    # 训练模型并进行参数搜索
+    param_grid = {'max_depth': [5, 10, None], 'n_estimators': [50, 100, 200]}
+    grid = GridSearchCV(RandomForestClassifier(class_weight='balanced', random_state=42),
+                        param_grid, scoring='f1_macro', cv=3, n_jobs=-1)
+    grid.fit(X_train, y_train)
+    print(f"Best Params for {emotion}: {grid.best_params_}")
+
+    # 训练最终模型
+    final_model = grid.best_estimator_
+
+    # 预测 development set 和 test set
+    dev_predictions_df[f'{emotion}'] = final_model.predict(X_dev)
+    test_predictions_df[f'{emotion}'] = final_model.predict(X_test)
+
+# 保存结果到 CSV
+dev_predictions_df.to_csv("development_predictions.csv", index=False)
+test_predictions_df.to_csv("test_predictions.csv", index=False)
+
+print("\nPredictions saved: 'development_predictions.csv' and 'test_predictions.csv'")
